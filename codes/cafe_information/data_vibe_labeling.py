@@ -95,7 +95,7 @@ def verileri_zenginlestir_ve_guncelle(sehir):
 
             print(f"✅ {kafe['isim']} güncellendi. Vibes: {vibes}")
         except Exception as e:
-            print(f"❌ {kafe['isim']} güncellenirken hata: {e}")
+            print(f" {kafe['isim']} güncellenirken hata: {e}")
 
 
 if __name__ == "__main__":

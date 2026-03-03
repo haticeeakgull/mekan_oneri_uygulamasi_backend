@@ -1,40 +1,73 @@
 import os
+import pandas as pd
 import json
 from dotenv import load_dotenv
-from supabase import create_client, Client
+from supabase import create_client
 
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+try:
+    # CSV dosyasını oku
+    df = pd.read_csv("kafe_verileri_ilceli.csv")
+    print(f"{len(df)} mekan okunuyor...")
+except Exception as e:
+    print(f"Dosya okuma hatası: {e}")
+    exit()
 
-with open(
-    "json_files/vektorlu_mekan_verisi_owner_yorumlarindan_temizlenmis_ankara.json",
-    "r",
-    encoding="utf-8",
-) as f:
-    kafeler = json.load(f)
+insert_list = []
 
-print(f"{len(kafeler)} mekan yükleniyor...")
+for index, row in df.iterrows():
+    try:
+        # GÖRSELDEKİ BAŞLIKLARA GÖRE DÜZELTİLDİ:
+        # 1. 'vektor' değil 'embedding' sütununa bakıyoruz
+        if pd.isna(row["embedding"]):
+            continue
 
-for kafe in kafeler:
+        # Eğer embedding zaten listeyse (bazı pandas versiyonları otomatik çevirebilir)
+        # direkt al, değilse json.loads kullan
+        vektor = row["embedding"]
+        if isinstance(vektor, str):
+            vektor = json.loads(vektor)
 
-    if not kafe.get("vektor"):
+        # 2. vibe_etiketleri dönüşümü
+        etiketler = row["vibe_etiketleri"]
+        if isinstance(etiketler, str):
+            # CSV'deki format ['etiket1', 'etiket2'] şeklindeyse json.loads çalışır
+            # Eğer sadece düz metinse .split(',') kullanmak gerekebilir
+            etiketler = json.loads(etiketler.replace("'", '"'))
+        elif pd.isna(etiketler):
+            etiketler = []
+
+        # VERİ SÖZLÜĞÜ (Görseldeki sütun isimleri ile birebir eşleşme)
+        data = {
+            "id": row["id"],  # Görselde ID var, eklemek iyi olur
+            "kafe_adi": row["kafe_adi"],  # 'isim' değil 'kafe_adi'
+            "ozellikler": (
+                row["ozellikler"] if pd.notna(row["ozellikler"]) else ""
+            ),  # 'yorumlar' değil 'ozellikler'
+            "embedding": vektor,
+            "latitude": row["latitude"],  # 'osm_lat' değil 'latitude'
+            "longitude": row["longitude"],  # 'osm_lon' değil 'longitude'
+            "vibe_etiketleri": etiketler,
+            "ilce_adi": row["ilce_adi"] if pd.notna(row["ilce_adi"]) else "Bilinmiyor",
+        }
+        insert_list.append(data)
+    except Exception as e:
+        print(f"Satır {index} işlenirken hata: {e}")
         continue
 
-    data = {
-        "kafe_adi": kafe["isim"],
-        "ozellikler": " ".join(kafe["yorumlar"][:]),
-        "embedding": kafe["vektor"],
-        "latitude": kafe["osm_lat"],
-        "longitude": kafe["osm_lon"],
-    }
-
-    try:
-        supabase.table("vektor_verili_adresli_kafeler").insert(data).execute()
-        print(f"✅ {kafe['isim']} yüklendi.")
-    except Exception as e:
-        print(f"❌ Hata ({kafe['isim']}): {e}")
+# 2. Toplu Yükleme
+try:
+    if insert_list:
+        # Tablo adını Supabase'de kontrol et (ilce_isimli_kafeler mi?)
+        supabase.table("ilce_isimli_kafeler").insert(insert_list).execute()
+        print(f"✅ {len(insert_list)} mekan başarıyla yüklendi!")
+    else:
+        print("⚠ Yüklenecek uygun veri bulunamadı.")
+except Exception as e:
+    print(f"❌ Supabase Yükleme Hatası: {e}")
 
 print("İşlem tamam!")

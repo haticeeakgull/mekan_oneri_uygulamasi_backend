@@ -2,9 +2,9 @@ import torch
 from transformers import AutoTokenizer, AutoModel
 from supabase import create_client
 import os
-import json
 from dotenv import load_dotenv
 
+# 1. Model ve Tokenizer Yükleme
 load_dotenv()
 model_yolu = "./models/bert_turkish/"
 tokenizer = AutoTokenizer.from_pretrained(model_yolu)
@@ -17,8 +17,8 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def akilli_kafe_ara(kullanici_sorgusu):
-    # 1. Vektörleştirme
+def akilli_kafe_ara(kullanici_sorgusu, secilen_ilce=None, secilen_vibe=None):
+    # Vektörleştirme
     inputs = tokenizer(
         kullanici_sorgusu,
         return_tensors="pt",
@@ -30,8 +30,7 @@ def akilli_kafe_ara(kullanici_sorgusu):
         outputs = model(**inputs)
     sorgu_vektoru = outputs.last_hidden_state[0][0].tolist()
 
-    # 2. Etiketlerle Uyumlu Kritik Kelimeler
-    # SQL'deki vibe_etiketleri sütunundaki kelimeleri buraya eklemek eşleşmeyi artırır
+    # Kritik Kelimeler
     kritik_kelimeler = [
         "kitap",
         "sessiz",
@@ -52,69 +51,55 @@ def akilli_kafe_ara(kullanici_sorgusu):
         "tavla",
     ]
 
-    bulunan_anahtarlar = [
-        kelime for kelime in kritik_kelimeler if kelime in kullanici_sorgusu.lower()
-    ]
-
-    # Eğer özel bir anahtar kelime bulunamadıysa bile boş gitmesin, tüm sorguyu gönderelim
+    bulunan_anahtarlar = [k for k in kritik_kelimeler if k in kullanici_sorgusu.lower()]
     arama_metni = (
         " ".join(bulunan_anahtarlar) if bulunan_anahtarlar else kullanici_sorgusu
     )
 
-    # 3. YENİ RPC ÇAĞRISI (v4)
-    rpc_response = supabase.rpc(
-        "kafe_ara_v4",  # Fonksiyon adını güncelledik
-        {
-            "query_embedding": sorgu_vektoru,
-            "search_query": arama_metni,
-            "match_threshold": 0.1,  # Daha geniş bir tarama için biraz düşürebilirsin
-            "match_count": 5,
-        },
-    ).execute()
-
-    return rpc_response.data
-
-
-# TEST EDELİM
-arama = ""
-sonuclar = akilli_kafe_ara(arama)
-
-if sonuclar:
-    for s in sonuclar:
-
-        print(f"Kafe: {s['kafe_adi']} - Benzerlik: %{s['similarity']*100:.2f}")
-        print(f"   Etiketler: {s['vibe_etiketleri']}")
-else:
-    print("Uygun bir mekan bulunamadı.")
+    # RPC Çağrısı
+    try:
+        rpc_response = supabase.rpc(
+            "kafe_ara_v5",
+            {
+                "query_embedding": sorgu_vektoru,
+                "search_query": arama_metni,
+                "p_ilce_adi": secilen_ilce,  # SQL'deki semt_adi filtresine gider
+                "p_vibe_etiketi": secilen_vibe,
+                "match_threshold": 0.1,
+                "match_count": 5,
+            },
+        ).execute()
+        return rpc_response.data
+    except Exception as e:
+        print(f"Hata oluştu: {e}")
+        return None
 
 
-# def kafe_tavsiye_et(kullanici_sorgusu):
-
-#     inputs = tokenizer(
-#         kullanici_sorgusu,
-#         return_tensors="pt",
-#         truncation=True,
-#         padding=True,
-#         max_length=512,
-#     )
-#     with torch.no_grad():
-#         outputs = model(**inputs)
-
-#     # Senin yöntemin olan [0][0] yani CLS token'ı alıyoruz
-#     sorgu_vektoru = outputs.last_hidden_state[0][0].tolist()
-
-#     # Supabase'deki 'kafe_ara' fonksiyonunu çağır
-#     rpc_response = supabase.rpc(
-#         "kafe_ara",
-#         {
-#             "query_embedding": sorgu_vektoru,
-#             "match_threshold": 0.5,  # Benzerlik oranı %50'den büyük olanlar
-#             "match_count": 5,  # En yakın 5 kafe
-#         },
-#     ).execute()
-
-#     return rpc_response.data
+# --- TEST VE YAZDIRMA ---
 
 
-# for s in sonuclar:
-#     print(f"Kafe: {s['kafe_adi']} - Benzerlik: %{s['similarity']*100:.2f}")
+def sonuclari_yazdir(baslik, sonuclar):
+    print(f"\n--- {baslik} ---")
+    if sonuclar:
+        for s in sonuclar:
+            # semt_adi veya ilce_adi hangisini istersen yazdırabilirsin
+            konum = s.get("semt_adi") or s.get("ilce_adi") or "Bilinmiyor"
+            benzerlik = s.get("similarity", 0) * 100
+            print(
+                f"✅ Kafe: {s['kafe_adi']} - Konum: {konum} - Benzerlik: %{benzerlik:.2f}"
+            )
+            print(f"   Etiketler: {s.get('vibe_etiketleri')}")
+    else:
+        print("❌ Uygun bir mekan bulunamadı.")
+
+
+# Senaryo Çalıştırmaları
+if __name__ == "__main__":
+    s1 = akilli_kafe_ara("sessiz kitap kafe")
+    sonuclari_yazdir("Genel Arama", s1)
+
+    s2 = akilli_kafe_ara("sakin güzel manzaralı salaş mekan", secilen_ilce="tunalı")
+    sonuclari_yazdir("Tunalı Filtreli Arama", s2)
+
+    s3 = akilli_kafe_ara("ders çalışmalık", secilen_vibe="salaş")
+    sonuclari_yazdir("Salaş Vibes Araması", s3)
